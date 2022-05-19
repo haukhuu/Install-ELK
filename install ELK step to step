@@ -1,0 +1,102 @@
+Cài đặt Elastic Stack (ELK) trên CentOS
+Server cài đặt ở đây thực hiện trên CentOS 7, trước tiên cần đảm bảo cài đặt Java (openjdk)
+
+yum update -y
+yum install java-1.8.0-openjdk-devel -y
+# kiểm tra bằng lệnh
+java -version
+---------------------------------------------------------------------------
+
+Bước 1) Cài đặt Elasticsearch CentOS
+Thực hiện lệnh:
+
+# thêm repo
+echo '[elasticsearch-7.x]
+name=Elasticsearch repository for 7.x packages
+baseurl=https://artifacts.elastic.co/packages/7.x/yum
+gpgcheck=1
+gpgkey=https://artifacts.elastic.co/GPG-KEY-elasticsearch
+enabled=1
+autorefresh=1
+type=rpm-md
+' > /etc/yum.repos.d/elasticsearch.repo
+# cài đặt
+yum install elasticsearch -y
+
+# kích hoạt dịch vụ
+systemctl enable elasticsearch.service
+systemctl start elasticsearch.service
+# Mở firewall cổng 9200 cho Es nếu cần
+firewall-cmd --permanent --add-port=9200/tcp
+firewall-cmd --permanent --add-port=9300/tcp
+firewall-cmd --reload
+
+# kiểm tra ES
+curl -XGET localhost:9200
+------------------------------------------------------------------
+Bước 2) Cài đặt Kibana CentOS
+Kibana là ứng dụng nền web, nó lắng nghe các truy vấn http gửi đến cổng mặc định 5601, phần này sẽ cấu hình truy cập trực tiếp đến cổng 5601 (cấu hình server.host ở dưới), nếu triển khai thực tế có thể bạn cần một proxy (ví dụ Nginx) để đảm bảo bảo mật, kiểm tra được user có quền truy cập Kibana
+
+yum install kibana -y
+systemctl enable kibana
+
+# cấu hình truy cập được từ mọi IP
+echo 'server.host: 0.0.0.0' >> /etc/kibana/kibana.yml
+
+systemctl start kibana
+
+firewall-cmd --permanent --add-port=5601/tcp
+firewall-cmd --permanent --add-port=5601/tcp
+firewall-cmd --reload
+Kiểm tra Kibana bằng cách truy cập đến địa chỉ IP server với cổng là 5601, ví dụ máy server đang có địa chỉ 192.168.1.104 thì truy cập đến http://192.168.1.104
+----------------------------------------------
+Bước 3) Cài đặt Logstash CentOS
+Logstash là nơi nhận dữ liệu đầu vào, nó xử lý sau đó chuyển lưu tại Elasticseach. Luồng làm việc của nó phải được cấu hình gồm cấu hình đầu vào input và đầu ra output. Trước tiên cài đặt bằng lệnh:
+
+yum install logstash -y
+Cấu hình logstash
+
+cp /etc/logstash/logstash-sample.conf /etc/logstash/conf.d/logstash.conf
+vim /etc/logstash/conf.d/logstash.conf
+Mở file và cấu hình như sau:
+------------------------------------------------------
+input {
+  beats {
+    port => 5044
+  }
+}
+
+output {
+  elasticsearch {
+    hosts => ["http://localhost:9200"]
+    index => "%{[@metadata][beat]}-%{[@metadata][version]}-%{+YYYY.MM.dd}"
+    #user => "elastic"
+    #password => "changeme"
+  }
+}
+-------------------------------------------------------
+Sau đó lưu lại và start logstash
+
+systemctl start logstash
+systemctl status logstash
+Chờ vài giây dể logstash chạy và kiểm tra port 5044 là port nhận log
+
+netstat -nutlp|grep 5044
+Cài đặt filebeat để bắt log và gửi log lên Logtash
+
+yum install -y filebeat
+Cấu hình gửi log lên Logstash
+
+vim /etc/filebeat/filebeat.yml
+Cấu hình như bên dưới
+
+filebeat.inputs:
+- type: log
+  enabled: true
+  paths:
+    - /var/log/message 
+    - /var/log/cron 
+
+output.logstash:
+  # IP của server Logstash, ở đây là localhost nếu gửi log đến server khác thì đặt đổi localhost thành IP server đó
+  hosts: ["localhost:5044"]
